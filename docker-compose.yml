@@ -1,0 +1,185 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    container_name: pkb_api
+    command: ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      - APP_ENV=production
+      - SETTINGS__NEO4J_URI=bolt://neo4j:7687
+      - SETTINGS__NEO4J_USER=neo4j
+      - SETTINGS__NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - SETTINGS__VALKEY_HOST=valkey
+      - SETTINGS__VALKEY_PORT=6379
+      - SETTINGS__MINIO_ENDPOINT=http://minio:9000
+      - SETTINGS__MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - SETTINGS__MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - SETTINGS__MINIO_SECURE=false
+      - SETTINGS__LANCEDB_URI=/data/lancedb
+      - SETTINGS__OLLAMA_HOST=http://host.docker.internal:11434
+      - SETTINGS__PROMETHEUS_PORT=9001
+      - SETTINGS__JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - SETTINGS__JWT_ALGORITHM=HS256
+      - SETTINGS__RATE_LIMIT=60
+      - SETTINGS__CORS_ORIGINS=${CORS_ORIGINS}
+      - SETTINGS__LOG_LEVEL=INFO
+      - SETTINGS__WORKER_BROKER_URI=valkey://valkey:6379/0
+      - SETTINGS__BACKPRESSURE_FREE_MEM_BYTES=1610612736
+      - SETTINGS__MAX_WORKERS=4
+      - SETTINGS__MPS_MONITOR_INTERVAL=5
+    ports:
+      - "8000:8000"
+      - "9001:9001"
+    volumes:
+      - lancedb-data:/data/lancedb
+      - ./logs:/var/log/pkb
+      - ./backups:/app/backups
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+  worker:
+    build:
+      context: .
+      target: worker
+    container_name: pkb_worker
+    command: ["python", "-m", "apps.workers.orchestrator"]
+    environment:
+      - APP_ENV=production
+      - SETTINGS__NEO4J_URI=bolt://neo4j:7687
+      - SETTINGS__NEO4J_USER=neo4j
+      - SETTINGS__NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - SETTINGS__VALKEY_HOST=valkey
+      - SETTINGS__VALKEY_PORT=6379
+      - SETTINGS__MINIO_ENDPOINT=http://minio:9000
+      - SETTINGS__MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - SETTINGS__MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - SETTINGS__MINIO_SECURE=false
+      - SETTINGS__LANCEDB_URI=/data/lancedb
+      - SETTINGS__OLLAMA_HOST=http://host.docker.internal:11434
+      - SETTINGS__WORKER_BROKER_URI=valkey://valkey:6379/0
+      - SETTINGS__BACKPRESSURE_FREE_MEM_BYTES=1610612736
+      - SETTINGS__MAX_WORKERS=4
+      - SETTINGS__MPS_MONITOR_INTERVAL=5
+    volumes:
+      - lancedb-data:/data/lancedb
+      - ./logs:/var/log/pkb
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+  neo4j:
+    image: neo4j:5.21.0-community
+    container_name: pkb_neo4j
+    environment:
+      - NEO4J_dbms_memory_heap_initial__size=2G
+      - NEO4J_dbms_memory_heap_max__size=2G
+      - NEO4J_dbms_memory_pagecache_size=1G
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4JLABS_PLUGINS=["apoc"]
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_uuid_enabled=true
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - ./db/neo4j_bootstrap.cypher:/docker-entrypoint-initdb.d/neo4j_bootstrap.cypher
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${NEO4J_PASSWORD}", "MATCH (n) RETURN count(n);"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+  valkey:
+    image: valkey/valkey:7.2
+    container_name: pkb_valkey
+    command: ["valkey-server", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru", "--save", "900", "1", "300", "10", "60", "1000"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-09-22T00-00-00Z
+    container_name: pkb_minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
+    ports:
+      - "9000:9000"
+      - "9002:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: pkb_prometheus
+    volumes:
+      - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    ports:
+      - "9090:9090"
+    depends_on:
+      api:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
+  valkey-data:
+  minio-data:
+  lancedb-data:

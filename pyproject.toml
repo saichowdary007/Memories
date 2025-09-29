@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-knowledge-brain"
+version = "0.1.0"
+description = "Local-first personal knowledge brain"
+readme = "README.md"
+authors = [
+  { name = "Memories Team", email = "dev@memories.local" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+plugins = []
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-ra -q --cov=apps --cov=connectors --cov=core --cov=apps --cov-report=term-missing"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "B", "I", "UP", "N", "ANN", "ASYNC", "S"]
+ignore = ["ANN101", "ANN102", "S101"]
+exclude = [".venv", "build", "dist"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.coverage.run]
+branch = true
+source = ["apps", "core", "connectors"]
+omit = ["tests/*", "scripts/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+precision = 2
